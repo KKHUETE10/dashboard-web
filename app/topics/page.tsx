@@ -163,7 +163,8 @@ export default function TopicsPage() {
   }, [guildId]);
 
   React.useEffect(() => {
-    if (!selectedTopic || !guildId) {
+    const safeSelectedTopic = selectedTopic;
+    if (!safeSelectedTopic || !guildId) {
       return;
     }
 
@@ -174,7 +175,7 @@ export default function TopicsPage() {
         const safeGuildId = guildId ?? "";
         const questionsData = await fetchTopicQuestions(
           safeGuildId,
-          selectedTopic
+          safeSelectedTopic
         );
         if (isMounted) {
           setQuestions(questionsData);
