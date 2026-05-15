@@ -167,6 +167,8 @@ export default function TopicsPage() {
       return;
     }
 
+    const safeSelectedTopic: string = selectedTopic;
+
     let isMounted = true;
 
     async function loadQuestions() {
@@ -174,7 +176,7 @@ export default function TopicsPage() {
         const safeGuildId = guildId ?? "";
         const questionsData = await fetchTopicQuestions(
           safeGuildId,
-          selectedTopic
+          safeSelectedTopic
         );
         if (isMounted) {
           setQuestions(questionsData);
