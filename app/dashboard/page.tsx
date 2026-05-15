@@ -233,9 +233,10 @@ export default function DashboardPage() {
     async function load() {
       setLoading(true);
       try {
+        const safeGuildId = guildId ?? "";
         const [statsData, topicsData] = await Promise.all([
-          fetchStats({ guildId }),
-          fetchTopics({ guildId }),
+          fetchStats({ guildId: safeGuildId }),
+          fetchTopics({ guildId: safeGuildId }),
         ]);
 
         if (!isMounted) {
