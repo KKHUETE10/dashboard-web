@@ -53,13 +53,13 @@ function buildRows(stats: StatWithId[]): QuizRow[] {
 
     return {
       id: stat.id,
-      user_id: stat.user_id,
-      name: stat.name ?? stat.user_id,
+      user_id: stat.user_id ?? "",
+      name: stat.name ?? stat.user_id ?? "",
       topic: stat.topic ?? "Unknown",
       correct: stat.correct ?? 0,
       total: stat.total ?? 0,
       accuracy,
-      timestamp: toDateLabel(stat.timestamp),
+      timestamp: toDateLabel(stat.timestamp ?? ""),
     };
   });
 }
@@ -102,7 +102,8 @@ export default function QuizAnalyticsPage() {
     async function load() {
       setLoading(true);
       try {
-        const statsData = await fetchStats({ guildId });
+        const safeGuildId = guildId ?? "";
+        const statsData = await fetchStats({ guildId: safeGuildId });
         if (!isMounted) {
           return;
         }
