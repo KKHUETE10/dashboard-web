@@ -221,9 +221,11 @@ export default function StudentsPage() {
                       tickFormatter={(value) => `${Math.round(value * 100)}%`}
                     />
                     <Tooltip
-                      formatter={(value: number) =>
-                        `${Math.round(value * 100)}%`
-                      }
+                      formatter={(value) => {
+                        const numericValue =
+                          typeof value === "number" ? value : Number(value);
+                        return `${Math.round(numericValue * 100)}%`;
+                      }}
                     />
                     <Line
                       type="monotone"
