@@ -64,9 +64,9 @@ function buildStudentRows(stats: StatWithId[]): StudentRow[] {
   >();
 
   stats.forEach((stat) => {
-    const key = stat.user_id;
+    const key = stat.user_id ?? "";
     const current = bucket.get(key) ?? {
-      name: stat.name ?? stat.user_id,
+      name: stat.name ?? stat.user_id ?? "",
       correct: 0,
       total: 0,
       quizzes: 0,
@@ -97,7 +97,7 @@ function buildStudentRows(stats: StatWithId[]): StudentRow[] {
     .map((row, index) => ({ ...row, rank: index + 1 }));
 }
 
-function buildStudentTrend(stats: StatWithId[], userId: string | null) {
+function buildStudentTrend(stats: StatWithId[], userId: string) {
   if (!userId) {
     return [] as StudentTrendPoint[];
   }
@@ -127,7 +127,7 @@ export default function StudentsPage() {
   const { guildId } = useGuild();
   const [stats, setStats] = React.useState<StatWithId[]>([]);
   const [loading, setLoading] = React.useState<boolean>(true);
-  const [selectedUser, setSelectedUser] = React.useState<string | null>(null);
+  const [selectedUser, setSelectedUser] = React.useState<string>("");
 
   React.useEffect(() => {
     if (!guildId) {
@@ -139,14 +139,15 @@ export default function StudentsPage() {
     async function load() {
       setLoading(true);
       try {
-        const statsData = await fetchStats({ guildId });
+        const safeGuildId = guildId ?? "";
+        const statsData = await fetchStats({ guildId: safeGuildId });
         if (!isMounted) {
           return;
         }
 
         setStats(statsData);
         if (!selectedUser && statsData.length > 0) {
-          setSelectedUser(statsData[0].user_id);
+          setSelectedUser(statsData[0].user_id ?? "");
         }
       } catch (error) {
         console.error("Failed to load students data", error);
@@ -198,7 +199,7 @@ export default function StudentsPage() {
               <select
                 id="student-select"
                 className="h-10 min-w-[220px] rounded-md border border-zinc-200 bg-white px-3 text-sm text-zinc-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-                value={selectedUser ?? ""}
+                value={selectedUser}
                 onChange={(event) => setSelectedUser(event.target.value)}
               >
                 {studentRows.map((student) => (
