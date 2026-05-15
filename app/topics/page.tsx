@@ -22,6 +22,7 @@ import type { StatWithId, TopicQuestionWithId, TopicWithId } from "@/types";
 const chartColors = {
   primary: "#2563eb",
   accent: "#f97316",
+  secondary: "#16a34a",
 };
 
 type TopicRow = {
@@ -262,9 +263,11 @@ export default function TopicsPage() {
                       tickFormatter={(value) => `${Math.round(value * 100)}%`}
                     />
                     <Tooltip
-                      formatter={(value: number) =>
-                        `${Math.round(value * 100)}%`
-                      }
+                      formatter={(value) => {
+                        const numericValue =
+                          typeof value === "number" ? value : Number(value);
+                        return `${Math.round(numericValue * 100)}%`;
+                      }}
                     />
                     <Bar dataKey="accuracy" radius={[6, 6, 0, 0]}>
                       {comparisonData.map((entry, index) => (
