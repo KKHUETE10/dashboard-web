@@ -2,6 +2,10 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
+import { GuildProvider } from "./providers";
+import Sidebar from "@/components/layout/Sidebar";
+import Topbar from "@/components/layout/Topbar";
+
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
@@ -27,7 +31,17 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full bg-zinc-50 text-zinc-900 dark:bg-black dark:text-zinc-100">
+        <GuildProvider>
+          <div className="flex min-h-screen">
+            <Sidebar />
+            <div className="flex min-h-screen flex-1 flex-col">
+              <Topbar />
+              <main className="flex-1 px-6 py-8">{children}</main>
+            </div>
+          </div>
+        </GuildProvider>
+      </body>
     </html>
   );
 }
