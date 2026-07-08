@@ -55,7 +55,7 @@ jobs:
           jscpd_log="jscpd.log"
 
           # -----------------------------------------------------------------
-          # 1) Syntax Compilation (Verificación estricta de tipos y sintaxis con TSC)
+          # 1) Syntax Compilation (Verificación estricta de tipos con TSC)
           # -----------------------------------------------------------------
           npx tsc --noEmit > "$syntax_log" 2>&1
           syntax_exit=$?
@@ -71,7 +71,7 @@ jobs:
           if [ "$lint_exit" -ne 0 ]; then overall_status=1; fi
 
           # -----------------------------------------------------------------
-          # 3) Security scan (npm audit enfocada en vulnerabilidades críticas)
+          # 3) Security scan (npm audit)
           # -----------------------------------------------------------------
           npm audit --audit-level=high > "$security_log" 2>&1
           security_exit=$?
@@ -141,22 +141,6 @@ jobs:
 
           source complex_metrics.out
 
-          # =================================================================
-          # NUEVO BLOQUE DE DEPURACIÓN (Se inserta justo aquí)
-          # =================================================================
-          echo "========================================="
-          echo "       QUALITY METRICS LOG DETAILS       "
-          echo "========================================="
-          echo "-> Syntax status:             $syntax_status"
-          echo "-> Lint status:               $lint_status"
-          echo "-> Security status:           $security_status"
-          echo "-> Max Cyclomatic Complexity: $max_complexity_score ($complexity_status)"
-          echo "-> Min Maintainability Index: $min_maintainability_score ($maintainability_status)"
-          echo "-> Max Nesting Depth:         $max_nesting_depth ($nesting_status)"
-          echo "-> Max Function Lines:        $max_function_lines ($function_size_status)"
-          echo "-> Max Import Fan-out:        $max_import_fanout ($coupling_status)"
-          echo "========================================="
-
           # Validamos si alguna métrica compleja ha marcado 'fail'
           for status_var in "$complexity_status" "$maintainability_status" "$nesting_status" "$function_size_status" "$coupling_status"; do
             if [ "$status_var" = "fail" ]; then overall_status=1; fi
@@ -203,9 +187,27 @@ jobs:
             echo "overall=$overall_label"
           } >> "$GITHUB_OUTPUT"
 
-          echo "========================================="
-          echo " METRICS SUMMARY GENERATED SUCCESSFULLY "
-          echo "========================================="
-          echo "Overall Result: $overall_label"
+          # -----------------------------------------------------------------
+          # RESUMEN EN CONSOLA CON VALORES NUMÉRICOS OBTENIDOS
+          # -----------------------------------------------------------------
+          echo "============================================================"
+          echo "           QUALITY METRICS SUMMARY REPORT                   "
+          echo "============================================================"
+          echo " -> Syntax Compilation:             [$syntax_status]"
+          echo " -> Lint (ESLint):                  [$lint_status]"
+          echo " -> Security scan (npm audit):      [$security_status]"
+          echo " -> Cyclomatic complexity (max 10):  [$complexity_status] (Worst score: $max_complexity_score)"
+          echo " -> Maintainability index (min 65): [$maintainability_status] (Lowest score: $min_maintainability_score)"
+          echo " -> Readability (Gunning Fog):      [$fog_status] (Score: $fog_score)"
+          echo " -> Identifier length:              [$identifier_status] (Avg len: $avg_identifier_len, Short ratio: $short_identifier_ratio)"
+          echo " -> Nesting depth (max 4):          [$nesting_status] (Max depth: $max_nesting_depth)"
+          echo " -> Function size (max 80 lines):   [$function_size_status] (Max lines found: $max_function_lines)"
+          echo " -> Class size (max 300 lines):     [$class_size_status] (Max lines found: $max_class_lines)"
+          echo " -> Coupling (import fan-out):      [$coupling_status] (Max fan-out: $max_import_fanout)"
+          echo " -> Code duplication (jscpd):       [$duplication_status]"
+          echo " -> Code smells:                    [$smells_status]"
+          echo "============================================================"
+          echo " OVERALL WORKFLOW RESULT:           $overall_label"
+          echo "============================================================"
 
           exit 0
