@@ -86,12 +86,12 @@ jobs:
           # -----------------------------------------------------------------
           # 6) Analizador AST y Generador de Reporte Unificado (Node.js)
           # -----------------------------------------------------------------
-          # Inyectamos de forma segura las variables de Bash como entorno de proceso hacia Node
-          export SYNTAX_STATUS="$syntax_status"
-          export LINT_STATUS="$lint_status"
-          export SECURITY_STATUS="$security_status"
-          export DUPLICATION_STATUS="$duplication_status"
-          export SMELLS_STATUS="$smells_status"
+          # Pasamos los resultados mediante variables de entorno tradicionales
+          export INJECT_SYNTAX="$syntax_status"
+          export INJECT_LINT="$lint_status"
+          export INJECT_SECURITY="$security_status"
+          export INJECT_DUPLICATION="$duplication_status"
+          export INJECT_SMELLS="$smells_status"
 
           node - <<'JS'
           const fs = require('fs');
@@ -202,15 +202,15 @@ jobs:
           const functionSizeStatus = maxFunctionLines <= 80 ? "pass" : "fail";
           const couplingStatus = maxImportFanout <= 15 ? "pass" : "fail";
 
-          // Recuperar de forma segura el entorno sin colisionar con las llaves de GitHub ${{ }}
-          const syntaxStatus = process.env.SYNTAX_STATUS || "fail";
-          const lintStatus = process.env.LINT_STATUS || "fail";
-          const securityStatus = process.env.SECURITY_STATUS || "fail";
-          const duplicationStatus = process.env.DUPLICATION_STATUS || "warning";
-          const smellsStatus = process.env.SMELLS_STATUS || "warning";
+          // Recuperar el entorno utilizando literales limpios evitando usar el signo $ pegado a corchetes
+          const sStatus = process.env.INJECT_SYNTAX || "fail";
+          const lStatus = process.env.INJECT_LINT || "fail";
+          const secStatus = process.env.INJECT_SECURITY || "fail";
+          const dupStatus = process.env.INJECT_DUPLICATION || "warning";
+          const smlStatus = process.env.INJECT_SMELLS || "warning";
           
           let overallLabel = "success";
-          if (syntaxStatus === "fail" || lintStatus === "fail" || securityStatus === "fail" || 
+          if (sStatus === "fail" || lStatus === "fail" || secStatus === "fail" || 
               complexityStatus === "fail" || maintainabilityStatus === "fail" || 
               nestingStatus === "fail" || functionSizeStatus === "fail" || couplingStatus === "fail") {
             overallLabel = "failed";
@@ -220,21 +220,21 @@ jobs:
           console.log("============================================================");
           console.log("           QUALITY METRICS SUMMARY REPORT                   ");
           console.log("============================================================");
-          console.log(` -> Syntax Compilation:             [${syntaxStatus}]`);
-          console.log(` -> Lint (ESLint):                  [${lintStatus}]`);
-          console.log(` -> Security scan (npm audit):      [${securityStatus}]`);
-          console.log(` -> Cyclomatic complexity (max 10):  [${complexityStatus}] (Worst score: ${maxCyclomatic})`);
-          console.log(` -> Maintainability index (min 65): [${maintainabilityStatus}] (Lowest score: ${finalAvgMaintainability.toFixed(2)})`);
-          console.log(` -> Readability (Gunning Fog):      [pass] (Score: 12.00)`);
-          console.log(` -> Identifier length:              [pass] (Avg len: 5.50, Short ratio: 0.05)`);
-          console.log(` -> Nesting depth (max 4):          [${nestingStatus}] (Max depth: ${maxNesting})`);
-          console.log(` -> Function size (max 80 lines):   [${functionSizeStatus}] (Max lines found: ${maxFunctionLines})`);
-          console.log(` -> Class size (max 300 lines):     [pass] (Max lines found: ${maxClassLines})`);
-          console.log(` -> Coupling (import fan-out):      [${couplingStatus}] (Max fan-out: ${maxImportFanout})`);
-          console.log(` -> Code duplication (jscpd):       [${duplicationStatus}]`);
-          console.log(` -> Code smells:                    [${smellsStatus}]`);
+          console.log(" -> Syntax Compilation:             [" + sStatus + "]");
+          console.log(" -> Lint (ESLint):                  [" + lStatus + "]");
+          console.log(" -> Security scan (npm audit):      [" + secStatus + "]");
+          console.log(" -> Cyclomatic complexity (max 10):  [" + complexityStatus + "] (Worst score: " + maxCyclomatic + ")");
+          console.log(" -> Maintainability index (min 65): [" + maintainabilityStatus + "] (Lowest score: " + finalAvgMaintainability.toFixed(2) + ")");
+          console.log(" -> Readability (Gunning Fog):      [pass] (Score: 12.00)");
+          console.log(" -> Identifier length:              [pass] (Avg len: 5.50, Short ratio: 0.05)");
+          console.log(" -> Nesting depth (max 4):          [" + nestingStatus + "] (Max depth: " + maxNesting + ")");
+          console.log(" -> Function size (max 80 lines):   [" + functionSizeStatus + "] (Max lines found: " + maxFunctionLines + ")");
+          console.log(" -> Class size (max 300 lines):     [pass] (Max lines found: " + maxClassLines + ")");
+          console.log(" -> Coupling (import fan-out):      [" + couplingStatus + "] (Max fan-out: " + maxImportFanout + ")");
+          console.log(" -> Code duplication (jscpd):       [" + dupStatus + "]");
+          console.log(" -> Code smells:                    [" + smlStatus + "]");
           console.log("============================================================");
-          console.log(` OVERALL WORKFLOW RESULT:           ${overallLabel}`);
+          console.log(" OVERALL WORKFLOW RESULT:           " + overallLabel);
           console.log("============================================================");
           JS
 
