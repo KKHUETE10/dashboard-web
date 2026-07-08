@@ -1,0 +1,678 @@
+name: Software Quality Metrics
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality-metrics:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies and quality tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff bandit radon pytest pytest-cov textstat pylint
+          if [ "${{ github.event_name }}" != "pull_request_target" ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Run quality metrics
+        id: metrics
+        shell: bash
+        run: |
+          set +e
+
+          if [ "${{ github.event_name }}" = "pull_request_target" ]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+            head_sha="${{ github.event.pull_request.head.sha }}"
+            git diff --name-only --diff-filter=ACMR "$base_sha...$head_sha" \
+              | grep -E '\.py$' \
+              | grep -Ev '^(discord/|venv/|__pycache__/)' \
+              > python_files.txt || true
+          else
+            git ls-files '*.py' ':!:discord/**' ':!:venv/**' ':!:__pycache__/**' > python_files.txt
+          fi
+
+          if [ ! -s python_files.txt ]; then
+            echo "No Python files found."
+            {
+              echo "syntax=skipped"
+              echo "lint=skipped"
+              echo "security=skipped"
+              echo "complexity=skipped"
+              echo "maintainability=skipped"
+                echo "fog=skipped"
+                echo "fog_score=n/a"
+                echo "identifier_length=skipped"
+                echo "avg_identifier_len=n/a"
+                echo "short_identifier_ratio=n/a"
+                echo "nesting=skipped"
+                echo "max_nesting_depth=n/a"
+                echo "function_size=skipped"
+                echo "max_function_lines=n/a"
+                echo "class_size=skipped"
+                echo "max_class_lines=n/a"
+                echo "coupling=skipped"
+                echo "max_import_fanout=n/a"
+                echo "duplication=skipped"
+                echo "smells=skipped"
+              echo "tests=skipped"
+                echo "coverage=skipped"
+                echo "coverage_percent=n/a"
+              echo "overall=success"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Python files to evaluate:"
+          cat python_files.txt
+
+          overall_status=0
+
+          # Files used to keep concise diagnostics for PR comments.
+          syntax_log="syntax.log"
+          lint_log="lint.log"
+          security_log="security.log"
+          complexity_log="complexity.log"
+          complexity_full_log="complexity_full.log"
+          maintainability_log="maintainability.log"
+          maintainability_full_log="maintainability_full.log"
+
+          # 1) Syntax check
+          xargs python -m py_compile < python_files.txt > "$syntax_log" 2>&1
+          syntax_exit=$?
+          if [ "$syntax_exit" -eq 0 ]; then
+            syntax_status="pass"
+          else
+            syntax_status="fail"
+            overall_status=1
+          fi
+
+          # 2) Lint check
+          xargs ruff check < python_files.txt > "$lint_log" 2>&1
+          lint_exit=$?
+          if [ "$lint_exit" -eq 0 ]; then
+            lint_status="pass"
+          else
+            lint_status="fail"
+            overall_status=1
+          fi
+
+          # 3) Security scan (only changed/selected Python files)
+          xargs bandit -q < python_files.txt > "$security_log" 2>&1
+          security_exit=$?
+          if [ "$security_exit" -eq 0 ]; then
+            security_status="pass"
+          else
+            security_status="fail"
+            overall_status=1
+          fi
+
+          # 4) Cyclomatic complexity (threshold: rank C or better)
+          xargs radon cc -s < python_files.txt > "$complexity_full_log" 2>&1
+          xargs radon cc -s -n C < python_files.txt > "$complexity_log" 2>&1
+          complexity_exit=$?
+          if [ "$complexity_exit" -ne 0 ]; then
+            complexity_status="fail"
+            overall_status=1
+          elif [ -s "$complexity_log" ]; then
+            complexity_status="fail"
+            overall_status=1
+          else
+            complexity_status="pass"
+          fi
+
+          # 5) Maintainability index (threshold: rank B or better)
+          xargs radon mi -s < python_files.txt > "$maintainability_full_log" 2>&1
+          xargs radon mi -s -n B < python_files.txt > "$maintainability_log" 2>&1
+          maintainability_exit=$?
+          if [ "$maintainability_exit" -ne 0 ]; then
+            maintainability_status="fail"
+            overall_status=1
+          elif [ -s "$maintainability_log" ]; then
+            maintainability_status="fail"
+            overall_status=1
+          else
+            maintainability_status="pass"
+          fi
+
+          python - <<'PY' > radon_summary.out
+          import re
+
+          complexity_file = "complexity_full.log"
+          maintainability_file = "maintainability_full.log"
+
+          cc_score = "n/a"
+          cc_target = "n/a"
+          cc_rank = "n/a"
+          current_file = None
+          max_score = None
+          max_target = None
+          max_rank = None
+
+          with open(complexity_file, "r", encoding="utf-8") as file_obj:
+            for raw_line in file_obj:
+              line = raw_line.rstrip("\n")
+              stripped = line.strip()
+              if not stripped:
+                continue
+              if stripped.endswith(".py") and " - " not in stripped:
+                current_file = stripped
+                continue
+              match = re.search(r"^([A-Z])\s+\d+:\d+\s+(.+)\s+-\s+([A-F])\s+\((\d+)\)$", stripped)
+              if not match:
+                continue
+              score = int(match.group(4))
+              if max_score is None or score > max_score:
+                max_score = score
+                max_rank = match.group(3)
+                block_name = match.group(2)
+                max_target = f"{current_file}: {block_name}" if current_file else block_name
+
+          if max_score is not None:
+            cc_score = str(max_score)
+            cc_target = max_target
+            cc_rank = max_rank
+
+          mi_score = "n/a"
+          mi_target = "n/a"
+          mi_rank = "n/a"
+          min_score = None
+          min_target = None
+          min_rank = None
+
+          with open(maintainability_file, "r", encoding="utf-8") as file_obj:
+            for raw_line in file_obj:
+              stripped = raw_line.strip()
+              if not stripped:
+                continue
+              match = re.search(r"^(.*\.py)\s+-\s+([A-C])\s+\(([0-9]+(?:\.[0-9]+)?)\)$", stripped)
+              if not match:
+                continue
+              score = float(match.group(3))
+              if min_score is None or score < min_score:
+                min_score = score
+                min_target = match.group(1)
+                min_rank = match.group(2)
+
+          if min_score is not None:
+            mi_score = f"{min_score:.2f}"
+            mi_target = min_target
+            mi_rank = min_rank
+
+          print(f"max_complexity_score={cc_score}")
+          print(f"max_complexity_rank={cc_rank}")
+          print(f"max_complexity_target={cc_target}")
+          print(f"min_maintainability_score={mi_score}")
+          print(f"min_maintainability_rank={mi_rank}")
+          print(f"min_maintainability_target={mi_target}")
+          PY
+
+          source radon_summary.out
+
+          # 6) Additional readability and structure metrics
+          python - <<'PY' > extra_metrics.out
+          import ast
+          import pathlib
+          import re
+
+          from textstat import textstat
+
+          files = []
+          with open("python_files.txt", "r", encoding="utf-8") as f:
+            for line in f:
+              p = line.strip()
+              if p:
+                files.append(p)
+
+          identifier_lengths = []
+          max_nesting_depth = 0
+          max_function_lines = 0
+          max_class_lines = 0
+          max_import_fanout = 0
+          readable_text_parts = []
+
+          short_whitelist = {"i", "j", "k", "x", "y", "z", "n", "m", "df", "id"}
+
+          def block_nesting_depth(node, depth=0):
+            child_depth = depth
+            for child in ast.iter_child_nodes(node):
+              is_block = isinstance(
+                child,
+                (
+                  ast.If,
+                  ast.For,
+                  ast.While,
+                  ast.Try,
+                  ast.With,
+                  ast.Match,
+                  ast.FunctionDef,
+                  ast.AsyncFunctionDef,
+                  ast.ClassDef,
+                ),
+              )
+              next_depth = depth + 1 if is_block else depth
+              child_depth = max(child_depth, block_nesting_depth(child, next_depth))
+            return child_depth
+
+          def collect_identifiers(tree):
+            names = []
+            for n in ast.walk(tree):
+              if isinstance(n, ast.Name):
+                names.append(n.id)
+              elif isinstance(n, ast.FunctionDef):
+                names.append(n.name)
+              elif isinstance(n, ast.AsyncFunctionDef):
+                names.append(n.name)
+              elif isinstance(n, ast.ClassDef):
+                names.append(n.name)
+              elif isinstance(n, ast.arg):
+                names.append(n.arg)
+            return names
+
+          for file_path in files:
+            path = pathlib.Path(file_path)
+            try:
+              source = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+              source = path.read_text(encoding="latin-1")
+
+            try:
+              tree = ast.parse(source)
+            except SyntaxError:
+              continue
+
+            doc = ast.get_docstring(tree)
+            if doc:
+              readable_text_parts.append(doc)
+
+            comments = re.findall(r"#(.*)", source)
+            readable_text_parts.extend([c.strip() for c in comments if c.strip()])
+
+            identifiers = collect_identifiers(tree)
+            for ident in identifiers:
+              if ident.startswith("_"):
+                ident = ident.lstrip("_")
+              if not ident:
+                continue
+              identifier_lengths.append(len(ident))
+
+            max_nesting_depth = max(max_nesting_depth, block_nesting_depth(tree, 0))
+
+            file_imports = set()
+            for node in ast.walk(tree):
+              if isinstance(node, ast.Import):
+                for alias in node.names:
+                  file_imports.add(alias.name.split(".")[0])
+              elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                  file_imports.add(node.module.split(".")[0])
+
+              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and hasattr(node, "end_lineno"):
+                if node.end_lineno is not None:
+                  function_len = max(1, node.end_lineno - node.lineno + 1)
+                  max_function_lines = max(max_function_lines, function_len)
+
+              if isinstance(node, ast.ClassDef) and hasattr(node, "end_lineno"):
+                if node.end_lineno is not None:
+                  class_len = max(1, node.end_lineno - node.lineno + 1)
+                  max_class_lines = max(max_class_lines, class_len)
+
+            max_import_fanout = max(max_import_fanout, len(file_imports))
+
+          if readable_text_parts:
+            readability_text = "\n".join(readable_text_parts)
+            fog_score = textstat.gunning_fog(readability_text)
+          else:
+            fog_score = 0.0
+
+          if identifier_lengths:
+            avg_identifier_len = sum(identifier_lengths) / len(identifier_lengths)
+            # Recompute short ratio with original names for whitelist check.
+            short_count = 0
+            total_count = 0
+            for file_path in files:
+              path = pathlib.Path(file_path)
+              try:
+                source = path.read_text(encoding="utf-8")
+              except UnicodeDecodeError:
+                source = path.read_text(encoding="latin-1")
+              try:
+                tree = ast.parse(source)
+              except SyntaxError:
+                continue
+              for ident in collect_identifiers(tree):
+                raw_ident = ident.lstrip("_")
+                if not raw_ident:
+                  continue
+                total_count += 1
+                if len(raw_ident) <= 2 and raw_ident not in short_whitelist:
+                  short_count += 1
+            short_ratio = (short_count / total_count) if total_count else 0.0
+          else:
+            avg_identifier_len = 0.0
+            short_ratio = 0.0
+
+          # Thresholds
+          fog_threshold = 20.0
+          max_nesting_threshold = 4
+          short_ratio_threshold = 0.20
+          min_avg_identifier_len = 3.0
+          max_function_lines_threshold = 80
+          max_class_lines_threshold = 300
+          max_import_fanout_threshold = 15
+
+          fog_status = "pass" if fog_score <= fog_threshold else "fail"
+          nesting_status = "pass" if max_nesting_depth <= max_nesting_threshold else "fail"
+          identifier_status = (
+            "pass"
+            if avg_identifier_len >= min_avg_identifier_len and short_ratio <= short_ratio_threshold
+            else "fail"
+          )
+          function_size_status = "pass" if max_function_lines <= max_function_lines_threshold else "fail"
+          class_size_status = "pass" if max_class_lines <= max_class_lines_threshold else "fail"
+          coupling_status = "pass" if max_import_fanout <= max_import_fanout_threshold else "fail"
+
+          print(f"fog_status={fog_status}")
+          print(f"fog_score={fog_score:.2f}")
+          print(f"identifier_status={identifier_status}")
+          print(f"avg_identifier_len={avg_identifier_len:.2f}")
+          print(f"short_identifier_ratio={short_ratio:.2f}")
+          print(f"nesting_status={nesting_status}")
+          print(f"max_nesting_depth={max_nesting_depth}")
+          print(f"function_size_status={function_size_status}")
+          print(f"max_function_lines={max_function_lines}")
+          print(f"class_size_status={class_size_status}")
+          print(f"max_class_lines={max_class_lines}")
+          print(f"coupling_status={coupling_status}")
+          print(f"max_import_fanout={max_import_fanout}")
+          PY
+
+          source extra_metrics.out
+          if [ "$fog_status" = "fail" ]; then
+            overall_status=1
+          fi
+          if [ "$identifier_status" = "fail" ]; then
+            overall_status=1
+          fi
+          if [ "$nesting_status" = "fail" ]; then
+            overall_status=1
+          fi
+          if [ "$function_size_status" = "fail" ]; then
+            overall_status=1
+          fi
+          if [ "$class_size_status" = "fail" ]; then
+            overall_status=1
+          fi
+          if [ "$coupling_status" = "fail" ]; then
+            overall_status=1
+          fi
+
+          xargs pylint --disable=all --enable=R0801 < python_files.txt > /dev/null 2>&1
+          duplication_exit=$?
+          if [ "$duplication_exit" -eq 0 ]; then
+            duplication_status="pass"
+          else
+            duplication_status="warning"
+          fi
+
+          xargs pylint --disable=all --enable=R,W < python_files.txt > /dev/null 2>&1
+          smells_exit=$?
+          if [ "$smells_exit" -eq 0 ]; then
+            smells_status="pass"
+          else
+            smells_status="warning"
+          fi
+
+          {
+            echo "fog=$fog_status"
+            echo "fog_score=$fog_score"
+            echo "identifier_length=$identifier_status"
+            echo "avg_identifier_len=$avg_identifier_len"
+            echo "short_identifier_ratio=$short_identifier_ratio"
+            echo "nesting=$nesting_status"
+            echo "max_nesting_depth=$max_nesting_depth"
+            echo "function_size=$function_size_status"
+            echo "max_function_lines=$max_function_lines"
+            echo "class_size=$class_size_status"
+            echo "max_class_lines=$max_class_lines"
+            echo "coupling=$coupling_status"
+            echo "max_import_fanout=$max_import_fanout"
+            echo "duplication=$duplication_status"
+            echo "smells=$smells_status"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "max_complexity_score=$max_complexity_score"
+            echo "max_complexity_rank=$max_complexity_rank"
+            echo "max_complexity_target=$max_complexity_target"
+            echo "min_maintainability_score=$min_maintainability_score"
+            echo "min_maintainability_rank=$min_maintainability_rank"
+            echo "min_maintainability_target=$min_maintainability_target"
+          } >> "$GITHUB_OUTPUT"
+
+          # 7) Unit tests (if present)
+          if [ "${{ github.event_name }}" = "pull_request_target" ]; then
+            tests_status="skipped"
+            coverage_status="skipped"
+            coverage_percent="n/a"
+          else
+            tests_count=$(find . -type f \( -name 'test_*.py' -o -name '*_test.py' \) | wc -l | tr -d ' ')
+            if [ "$tests_count" -eq 0 ]; then
+              tests_status="skipped"
+              coverage_status="skipped"
+              coverage_percent="n/a"
+            else
+              pytest -q --cov=. --cov-report=term --cov-report=xml:coverage.xml
+              tests_exit=$?
+              if [ "$tests_exit" -eq 0 ]; then
+                tests_status="pass"
+              else
+                tests_status="fail"
+                overall_status=1
+              fi
+
+              if [ -f coverage.xml ]; then
+                coverage_percent=$(python -c 'import xml.etree.ElementTree as ET; root = ET.parse("coverage.xml").getroot(); line_rate = float(root.attrib.get("line-rate", 0.0)); print(f"{line_rate * 100:.2f}")')
+                if python -c 'import sys; cov = float(sys.argv[1]); raise SystemExit(0 if cov >= 70.0 else 1)' "$coverage_percent"
+                then
+                  coverage_status="pass"
+                else
+                  coverage_status="fail"
+                  overall_status=1
+                fi
+              else
+                coverage_status="fail"
+                coverage_percent="n/a"
+                overall_status=1
+              fi
+            fi
+          fi
+
+          if [ "$overall_status" -eq 0 ]; then
+            overall_label="success"
+          else
+            overall_label="failed"
+          fi
+
+          {
+            echo "syntax=$syntax_status"
+            echo "lint=$lint_status"
+            echo "security=$security_status"
+            echo "complexity=$complexity_status"
+            echo "maintainability=$maintainability_status"
+            echo "tests=$tests_status"
+            echo "coverage=$coverage_status"
+            echo "coverage_percent=$coverage_percent"
+            echo "overall=$overall_label"
+          } >> "$GITHUB_OUTPUT"
+
+          # Build details block for PR comment with files evaluated and fail reasons.
+          {
+            echo "details<<EOF"
+            echo "### Evaluated Python files"
+            sed 's/^/- /' python_files.txt
+            echo
+
+            if [ "$syntax_status" = "fail" ]; then
+              echo "### Syntax compilation details"
+              tail -n 40 "$syntax_log" | sed 's/^/> /'
+              echo
+            fi
+
+            if [ "$lint_status" = "fail" ]; then
+              echo "### Lint (ruff) details"
+              tail -n 80 "$lint_log" | sed 's/^/> /'
+              echo
+            fi
+
+            if [ "$security_status" = "fail" ]; then
+              echo "### Security scan (bandit) details"
+              tail -n 120 "$security_log" | sed 's/^/> /'
+              echo
+            fi
+
+            if [ "$complexity_status" = "fail" ]; then
+              echo "### Cyclomatic complexity details"
+              tail -n 80 "$complexity_log" | sed 's/^/> /'
+              echo
+              echo "> Worst block: $max_complexity_target"
+              echo "> Worst score: $max_complexity_score (rank $max_complexity_rank)"
+              echo
+            fi
+
+            if [ "$maintainability_status" = "fail" ]; then
+              echo "### Maintainability details"
+              tail -n 80 "$maintainability_log" | sed 's/^/> /'
+              echo
+              echo "> Lowest MI file: $min_maintainability_target"
+              echo "> Lowest MI score: $min_maintainability_score (rank $min_maintainability_rank)"
+              echo
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          # This workflow is informational only: expose metrics in PR comments
+          # without failing the job.
+          exit 0
+
+      - name: Upsert PR quality comment
+        if: always() && github.event_name == 'pull_request_target'
+        continue-on-error: true
+        uses: actions/github-script@v8
+        env:
+          SYNTAX_STATUS: ${{ steps.metrics.outputs.syntax }}
+          LINT_STATUS: ${{ steps.metrics.outputs.lint }}
+          SECURITY_STATUS: ${{ steps.metrics.outputs.security }}
+          COMPLEXITY_STATUS: ${{ steps.metrics.outputs.complexity }}
+          MAX_COMPLEXITY_SCORE: ${{ steps.metrics.outputs.max_complexity_score }}
+          MAX_COMPLEXITY_RANK: ${{ steps.metrics.outputs.max_complexity_rank }}
+          MAX_COMPLEXITY_TARGET: ${{ steps.metrics.outputs.max_complexity_target }}
+          MAINTAINABILITY_STATUS: ${{ steps.metrics.outputs.maintainability }}
+          MIN_MAINTAINABILITY_SCORE: ${{ steps.metrics.outputs.min_maintainability_score }}
+          MIN_MAINTAINABILITY_RANK: ${{ steps.metrics.outputs.min_maintainability_rank }}
+          MIN_MAINTAINABILITY_TARGET: ${{ steps.metrics.outputs.min_maintainability_target }}
+          FOG_STATUS: ${{ steps.metrics.outputs.fog }}
+          FOG_SCORE: ${{ steps.metrics.outputs.fog_score }}
+          IDENTIFIER_STATUS: ${{ steps.metrics.outputs.identifier_length }}
+          AVG_IDENTIFIER_LEN: ${{ steps.metrics.outputs.avg_identifier_len }}
+          SHORT_IDENTIFIER_RATIO: ${{ steps.metrics.outputs.short_identifier_ratio }}
+          NESTING_STATUS: ${{ steps.metrics.outputs.nesting }}
+          MAX_NESTING_DEPTH: ${{ steps.metrics.outputs.max_nesting_depth }}
+          FUNCTION_SIZE_STATUS: ${{ steps.metrics.outputs.function_size }}
+          MAX_FUNCTION_LINES: ${{ steps.metrics.outputs.max_function_lines }}
+          CLASS_SIZE_STATUS: ${{ steps.metrics.outputs.class_size }}
+          MAX_CLASS_LINES: ${{ steps.metrics.outputs.max_class_lines }}
+          COUPLING_STATUS: ${{ steps.metrics.outputs.coupling }}
+          MAX_IMPORT_FANOUT: ${{ steps.metrics.outputs.max_import_fanout }}
+          DUPLICATION_STATUS: ${{ steps.metrics.outputs.duplication }}
+          SMELLS_STATUS: ${{ steps.metrics.outputs.smells }}
+          TESTS_STATUS: ${{ steps.metrics.outputs.tests }}
+          COVERAGE_STATUS: ${{ steps.metrics.outputs.coverage }}
+          COVERAGE_PERCENT: ${{ steps.metrics.outputs.coverage_percent }}
+          OVERALL_STATUS: ${{ steps.metrics.outputs.overall }}
+          METRICS_DETAILS: ${{ steps.metrics.outputs.details }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const marker = '<!-- pr-quality-metrics-comment -->';
+            const icon = (status) => {
+              if (status === 'pass' || status === 'success') return '✅';
+              if (status === 'skipped') return '➖';
+              return '❌';
+            };
+
+            const body = `${marker}
+            ## Software Quality Metrics
+
+            | Metric | Status |
+            |---|---|
+            | Syntax compilation | ${icon(process.env.SYNTAX_STATUS)} ${process.env.SYNTAX_STATUS || 'n/a'} |
+            | Lint (ruff) | ${icon(process.env.LINT_STATUS)} ${process.env.LINT_STATUS || 'n/a'} |
+            | Security scan (bandit) | ${icon(process.env.SECURITY_STATUS)} ${process.env.SECURITY_STATUS || 'n/a'} |
+            | Cyclomatic complexity (radon cc, max C) | ${icon(process.env.COMPLEXITY_STATUS)} ${process.env.COMPLEXITY_STATUS || 'n/a'} (worst: ${process.env.MAX_COMPLEXITY_SCORE || 'n/a'}, rank: ${process.env.MAX_COMPLEXITY_RANK || 'n/a'}) |
+            | Maintainability index (radon mi, min B) | ${icon(process.env.MAINTAINABILITY_STATUS)} ${process.env.MAINTAINABILITY_STATUS || 'n/a'} (lowest: ${process.env.MIN_MAINTAINABILITY_SCORE || 'n/a'}, rank: ${process.env.MIN_MAINTAINABILITY_RANK || 'n/a'}) |
+            | Readability (Gunning Fog, max 20) | ${icon(process.env.FOG_STATUS)} ${process.env.FOG_STATUS || 'n/a'} (score: ${process.env.FOG_SCORE || 'n/a'}) |
+            | Identifier length (avg >= 3 and short ratio <= 20%) | ${icon(process.env.IDENTIFIER_STATUS)} ${process.env.IDENTIFIER_STATUS || 'n/a'} (avg: ${process.env.AVG_IDENTIFIER_LEN || 'n/a'}, short ratio: ${process.env.SHORT_IDENTIFIER_RATIO || 'n/a'}) |
+            | Nesting depth (max 4) | ${icon(process.env.NESTING_STATUS)} ${process.env.NESTING_STATUS || 'n/a'} (max depth: ${process.env.MAX_NESTING_DEPTH || 'n/a'}) |
+            | Function size (max 80 lines) | ${icon(process.env.FUNCTION_SIZE_STATUS)} ${process.env.FUNCTION_SIZE_STATUS || 'n/a'} (max: ${process.env.MAX_FUNCTION_LINES || 'n/a'}) |
+            | Class size (max 300 lines) | ${icon(process.env.CLASS_SIZE_STATUS)} ${process.env.CLASS_SIZE_STATUS || 'n/a'} (max: ${process.env.MAX_CLASS_LINES || 'n/a'}) |
+            | Coupling (import fan-out max 15) | ${icon(process.env.COUPLING_STATUS)} ${process.env.COUPLING_STATUS || 'n/a'} (max fan-out: ${process.env.MAX_IMPORT_FANOUT || 'n/a'}) |
+            | Code duplication (pylint duplicate-code) | ${icon(process.env.DUPLICATION_STATUS)} ${process.env.DUPLICATION_STATUS || 'n/a'} |
+            | Code smells (pylint R/W checks) | ${icon(process.env.SMELLS_STATUS)} ${process.env.SMELLS_STATUS || 'n/a'} |
+            | Unit tests (pytest) | ${icon(process.env.TESTS_STATUS)} ${process.env.TESTS_STATUS || 'n/a'} |
+            | Test coverage (min 70%) | ${icon(process.env.COVERAGE_STATUS)} ${process.env.COVERAGE_STATUS || 'n/a'} (coverage: ${process.env.COVERAGE_PERCENT || 'n/a'}%) |
+
+            **Overall result:** ${icon(process.env.OVERALL_STATUS)} ${process.env.OVERALL_STATUS || 'n/a'}
+
+            ${process.env.METRICS_DETAILS || ''}
+
+            [View workflow run](${process.env.RUN_URL})`;
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request?.number ?? context.issue.number;
+
+            if (!issue_number) {
+              core.info('No pull_request number found. Skipping PR comment upsert.');
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100
+            });
+
+            const previous = comments.find(c => c.body && c.body.includes(marker));
+
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: previous.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body
+              });
+            }
