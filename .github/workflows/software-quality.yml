@@ -1,4 +1,4 @@
-name: Software Quality Metrics
+name: Web Software Quality Metrics
 
 on:
   push:
@@ -13,395 +13,84 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          python-version: "3.11"
+          node-version: "20"
+          cache: "npm"
 
-      - name: Install dependencies and quality tooling
+      - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install ruff bandit radon pytest pytest-cov textstat pylint
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          else
-            echo "requirements.txt not found; skipping project dependency install."
-          fi
+          npm ci --include=dev
 
-      - name: Run quality metrics
+      - name: Run Quality Metrics
         id: metrics
         shell: bash
         run: |
           set +e
-
-          # Buscamos físicamente todos los archivos .py excluyendo las carpetas deseadas
-          find . -type f -name "*.py" \
-            ! -path "*/discord/*" \
-            ! -path "*/venv/*" \
-            ! -path "*/__pycache__/*" \
-            > python_files.txt
-
-          # Verificamos si realmente se encontraron archivos
-          if [ ! -s python_files.txt ]; then
-            echo "No Python files found."
-            {
-              echo "syntax=skipped"
-              echo "lint=skipped"
-              echo "security=skipped"
-              echo "complexity=skipped"
-              echo "maintainability=skipped"
-              echo "fog=skipped"
-              echo "fog_score=n/a"
-              echo "identifier_length=skipped"
-              echo "avg_identifier_len=n/a"
-              echo "short_identifier_ratio=n/a"
-              echo "nesting=skipped"
-              echo "max_nesting_depth=n/a"
-              echo "function_size=skipped"
-              echo "max_function_lines=n/a"
-              echo "class_size=skipped"
-              echo "max_class_lines=n/a"
-              echo "coupling=skipped"
-              echo "max_import_fanout=n/a"
-              echo "duplication=skipped"
-              echo "smells=skipped"
-              echo "tests=skipped"
-              echo "coverage=skipped"
-              echo "coverage_percent=n/a"
-              echo "overall=success"
-            } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "Python files to evaluate:"
-          cat python_files.txt
-
           overall_status=0
 
-          # Archivos de diagnóstico locales
-          syntax_log="syntax.log"
-          lint_log="lint.log"
-          security_log="security.log"
-          complexity_log="complexity.log"
-          complexity_full_log="complexity_full.log"
-          maintainability_log="maintainability.log"
-          maintainability_full_log="maintainability_full.log"
-
-          # 1) Syntax check
-          xargs python -m py_compile < python_files.txt > "$syntax_log" 2>&1
-          syntax_exit=$?
-          if [ "$syntax_exit" -eq 0 ]; then
-            syntax_status="pass"
+          echo "========================================="
+          echo " 1) RUNNING LINTER (ESLint)              "
+          echo "========================================="
+          # Ejecuta el linter sobre los componentes de Next.js
+          npm run lint > eslint.log 2>&1
+          eslint_exit=$?
+          
+          if [ "$eslint_exit" -eq 0 ]; then
+            echo "✅ Lint check passed!"
+            eslint_status="pass"
           else
-            syntax_status="fail"
+            echo "❌ Lint check failed! See errors below:"
+            cat eslint.log
+            eslint_status="fail"
             overall_status=1
           fi
 
-          # 2) Lint check
-          xargs ruff check < python_files.txt > "$lint_log" 2>&1
-          lint_exit=$?
-          if [ "$lint_exit" -eq 0 ]; then
-            lint_status="pass"
+          echo -e "\n========================================="
+          echo " 2) RUNNING CODE DUPLICATION (jscpd)     "
+          echo "========================================="
+          # Analiza la duplicación en carpetas clave (app, components, etc.) sin requerir instalación global
+          npx jscpd app/ components/ lib/ --min-lines 5 --min-tokens 40 > jscpd.log 2>&1
+          jscpd_exit=$?
+          
+          # jscpd devuelve 0 si no hay duplicación excesiva, o >0 si supera el umbral básico
+          if [ "$jscpd_exit" -eq 0 ]; then
+            echo "✅ No significant code duplication found."
+            duplication_status="pass"
           else
-            lint_status="fail"
-            overall_status=1
+            echo "⚠️ Potential code duplication detected or directories missing:"
+            cat jscpd.log
+            duplication_status="warning"
           fi
 
-          # 3) Security scan
-          xargs bandit -q < python_files.txt > "$security_log" 2>&1
-          security_exit=$?
-          if [ "$security_exit" -eq 0 ]; then
+          echo -e "\n========================================="
+          echo " 3) RUNNING SECURITY AUDIT (npm audit)  "
+          echo "========================================="
+          # Analiza vulnerabilidades conocidas en tus dependencias de npm
+          npm audit --audit-level=high > audit.log 2>&1
+          audit_exit=$?
+          
+          if [ "$audit_exit" -eq 0 ]; then
+            echo "✅ No high or critical vulnerabilities found found found found."
             security_status="pass"
           else
+            echo "❌ High/Critical security vulnerabilities detected in packages:"
+            cat audit.log
             security_status="fail"
             overall_status=1
           fi
 
-          # 4) Cyclomatic complexity (threshold: rank C or better)
-          xargs radon cc -s < python_files.txt > "$complexity_full_log" 2>&1
-          xargs radon cc -s -n C < python_files.txt > "$complexity_log" 2>&1
-          complexity_exit=$?
-          if [ "$complexity_exit" -ne 0 ] || [ -s "$complexity_log" ]; then
-            complexity_status="fail"
-            overall_status=1
-          else
-            complexity_status="pass"
-          fi
-
-          # 5) Maintainability index (threshold: rank B or better)
-          xargs radon mi -s < python_files.txt > "$maintainability_full_log" 2>&1
-          xargs radon mi -s -n B < python_files.txt > "$maintainability_log" 2>&1
-          maintainability_exit=$?
-          if [ "$maintainability_exit" -ne 0 ] || [ -s "$maintainability_log" ]; then
-            maintainability_status="fail"
-            overall_status=1
-          else
-            maintainability_status="pass"
-          fi
-
-          python - <<'PY' > radon_summary.out
-          import re
-
-          complexity_file = "complexity_full.log"
-          maintainability_file = "maintainability_full.log"
-
-          cc_score, cc_target, cc_rank = "n/a", "n/a", "n/a"
-          current_file, max_score, max_target, max_rank = None, None, None, None
-
-          with open(complexity_file, "r", encoding="utf-8") as file_obj:
-            for raw_line in file_obj:
-              line = raw_line.rstrip("\n")
-              stripped = line.strip()
-              if not stripped:
-                continue
-              if stripped.endswith(".py") and " - " not in stripped:
-                current_file = stripped
-                continue
-              match = re.search(r"^([A-Z])\s+\d+:\d+\s+(.+)\s+-\s+([A-F])\s+\((\d+)\)$", stripped)
-              if not match:
-                continue
-              score = int(match.group(4))
-              if max_score is None or score > max_score:
-                max_score = score
-                max_rank = match.group(3)
-                block_name = match.group(2)
-                max_target = f"{current_file}: {block_name}" if current_file else block_name
-
-          if max_score is not None:
-            cc_score, cc_target, cc_rank = str(max_score), max_target, max_rank
-
-          mi_score, mi_target, mi_rank = "n/a", "n/a", "n/a"
-          min_score, min_target, min_rank = None, None, None
-
-          with open(maintainability_file, "r", encoding="utf-8") as file_obj:
-            for raw_line in file_obj:
-              stripped = raw_line.strip()
-              if not stripped:
-                continue
-              match = re.search(r"^(.*\.py)\s+-\s+([A-C])\s+\(([0-9]+(?:\.[0-9]+)?)\)$", stripped)
-              if not match:
-                continue
-              score = float(match.group(3))
-              if min_score is None or score < min_score:
-                min_score = score
-                min_target = match.group(1)
-                min_rank = match.group(2)
-
-          if min_score is not None:
-            mi_score, mi_target, mi_rank = f"{min_score:.2f}", min_target, min_rank
-
-          print(f"max_complexity_score={cc_score}")
-          print(f"max_complexity_rank={cc_rank}")
-          print(f"max_complexity_target={cc_target}")
-          print(f"min_maintainability_score={mi_score}")
-          print(f"min_maintainability_rank={mi_rank}")
-          print(f"min_maintainability_target={mi_target}")
-          PY
-
-          source radon_summary.out
-
-          # 6) Additional readability and structure metrics
-          python - <<'PY' > extra_metrics.out
-          import ast
-          import pathlib
-          import re
-          from textstat import textstat
-
-          files = []
-          with open("python_files.txt", "r", encoding="utf-8") as f:
-            for line in f:
-              p = line.strip()
-              if p: files.append(p)
-
-          identifier_lengths = []
-          max_nesting_depth = 0
-          max_function_lines = 0
-          max_class_lines = 0
-          max_import_fanout = 0
-          readable_text_parts = []
-          short_whitelist = {"i", "j", "k", "x", "y", "z", "n", "m", "df", "id"}
-
-          def block_nesting_depth(node, depth=0):
-            child_depth = depth
-            for child in ast.iter_child_nodes(node):
-              is_block = isinstance(child, (ast.If, ast.For, ast.While, ast.Try, ast.With, ast.Match, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-              next_depth = depth + 1 if is_block else depth
-              child_depth = max(child_depth, block_nesting_depth(child, next_depth))
-            return child_depth
-
-          def collect_identifiers(tree):
-            names = []
-            for n in ast.walk(tree):
-              if isinstance(n, ast.Name): names.append(n.id)
-              elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)): names.append(n.name)
-              elif isinstance(n, ast.arg): names.append(n.arg)
-            return names
-
-          for file_path in files:
-            path = pathlib.Path(file_path)
-            try: source = path.read_text(encoding="utf-8")
-            except UnicodeDecodeError: source = path.read_text(encoding="latin-1")
-
-            try: tree = ast.parse(source)
-            except SyntaxError: continue
-
-            doc = ast.get_docstring(tree)
-            if doc: readable_text_parts.append(doc)
-
-            comments = re.findall(r"#(.*)", source)
-            readable_text_parts.extend([c.strip() for c in comments if c.strip()])
-
-            identifiers = collect_identifiers(tree)
-            for ident in identifiers:
-              if ident.startswith("_"): ident = ident.lstrip("_")
-              if not ident: continue
-              identifier_lengths.append(len(ident))
-
-            max_nesting_depth = max(max_nesting_depth, block_nesting_depth(tree, 0))
-
-            file_imports = set()
-            for node in ast.walk(tree):
-              if isinstance(node, ast.Import):
-                for alias in node.names: file_imports.add(alias.name.split(".")[0])
-              elif isinstance(node, ast.ImportFrom) and node.module:
-                file_imports.add(node.module.split(".")[0])
-
-              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and hasattr(node, "end_lineno") and node.end_lineno is not None:
-                max_function_lines = max(max_function_lines, max(1, node.end_lineno - node.lineno + 1))
-
-              if isinstance(node, ast.ClassDef) and hasattr(node, "end_lineno") and node.end_lineno is not None:
-                max_class_lines = max(max_class_lines, max(1, node.end_lineno - node.lineno + 1))
-
-            max_import_fanout = max(max_import_fanout, len(file_imports))
-
-          if readable_text_parts:
-            fog_score = textstat.gunning_fog("\n".join(readable_text_parts))
-          else:
-            fog_score = 0.0
-
-          if identifier_lengths:
-            avg_identifier_len = sum(identifier_lengths) / len(identifier_lengths)
-            short_count, total_count = 0, 0
-            for file_path in files:
-              path = pathlib.Path(file_path)
-              try: source = path.read_text(encoding="utf-8")
-              except UnicodeDecodeError: source = path.read_text(encoding="latin-1")
-              try: tree = ast.parse(source)
-              except SyntaxError: continue
-              for ident in collect_identifiers(tree):
-                raw_ident = ident.lstrip("_")
-                if not raw_ident: continue
-                total_count += 1
-                if len(raw_ident) <= 2 and raw_ident not in short_whitelist: short_count += 1
-            short_ratio = (short_count / total_count) if total_count else 0.0
-          else:
-            avg_identifier_len, short_ratio = 0.0, 0.0
-
-          # Thresholds
-          fog_status = "pass" if fog_score <= 20.0 else "fail"
-          nesting_status = "pass" if max_nesting_depth <= 4 else "fail"
-          identifier_status = "pass" if avg_identifier_len >= 3.0 and short_ratio <= 0.20 else "fail"
-          function_size_status = "pass" if max_function_lines <= 80 else "fail"
-          class_size_status = "pass" if max_class_lines <= 300 else "fail"
-          coupling_status = "pass" if max_import_fanout <= 15 else "fail"
-
-          print(f"fog_status={fog_status}")
-          print(f"fog_score={fog_score:.2f}")
-          print(f"identifier_status={identifier_status}")
-          print(f"avg_identifier_len={avg_identifier_len:.2f}")
-          print(f"short_identifier_ratio={short_ratio:.2f}")
-          print(f"nesting_status={nesting_status}")
-          print(f"max_nesting_depth={max_nesting_depth}")
-          print(f"function_size_status={function_size_status}")
-          print(f"max_function_lines={max_function_lines}")
-          print(f"class_size_status={class_size_status}")
-          print(f"max_class_lines={max_class_lines}")
-          print(f"coupling_status={coupling_status}")
-          print(f"max_import_fanout={max_import_fanout}")
-          PY
-
-          source extra_metrics.out
-          for status_var in "$fog_status" "$identifier_status" "$nesting_status" "$function_size_status" "$class_size_status" "$coupling_status"; do
-            if [ "$status_var" = "fail" ]; then overall_status=1; fi
-          done
-
-          xargs pylint --disable=all --enable=R0801 < python_files.txt > /dev/null 2>&1
-          duplication_status=$([ $? -eq 0 ] && echo "pass" || echo "warning")
-
-          xargs pylint --disable=all --enable=R,W < python_files.txt > /dev/null 2>&1
-          smells_status=$([ $? -eq 0 ] && echo "pass" || echo "warning")
-
+          # Registrar outputs en GitHub Actions por si necesitas utilizarlos en otros jobs
           {
-            echo "fog=$fog_status"
-            echo "fog_score=$fog_score"
-            echo "identifier_length=$identifier_status"
-            echo "avg_identifier_len=$avg_identifier_len"
-            echo "short_identifier_ratio=$short_identifier_ratio"
-            echo "nesting=$nesting_status"
-            echo "max_nesting_depth=$max_nesting_depth"
-            echo "function_size=$function_size_status"
-            echo "max_function_lines=$max_function_lines"
-            echo "class_size=$class_size_status"
-            echo "max_class_lines=$max_class_lines"
-            echo "coupling=$coupling_status"
-            echo "max_import_fanout=$max_import_fanout"
+            echo "lint=$eslint_status"
             echo "duplication=$duplication_status"
-            echo "smells=$smells_status"
-            echo "max_complexity_score=$max_complexity_score"
-            echo "max_complexity_rank=$max_complexity_rank"
-            echo "max_complexity_target=$max_complexity_target"
-            echo "min_maintainability_score=$min_maintainability_score"
-            echo "min_maintainability_rank=$min_maintainability_rank"
-            echo "min_maintainability_target=$min_maintainability_target"
-          } >> "$GITHUB_OUTPUT"
-
-          # 7) Unit tests y cobertura (Ejecución completa siempre)
-          tests_count=$(find . -type f \( -name 'test_*.py' -o -name '*_test.py' \) | wc -l | tr -d ' ')
-          if [ "$tests_count" -eq 0 ]; then
-            tests_status="skipped"
-            coverage_status="skipped"
-            coverage_percent="n/a"
-          else
-            pytest -q --cov=. --cov-report=term --cov-report=xml:coverage.xml
-            tests_exit=$?
-            tests_status=$([ "$tests_exit" -eq 0 ] && echo "pass" || echo "fail")
-            if [ "$tests_exit" -ne 0 ]; then overall_status=1; fi
-
-            if [ -f coverage.xml ]; then
-              coverage_percent=$(python -c 'import xml.etree.ElementTree as ET; root = ET.parse("coverage.xml").getroot(); line_rate = float(root.attrib.get("line-rate", 0.0)); print(f"{line_rate * 100:.2f}")')
-              if python -c 'import sys; cov = float(sys.argv[1]); raise SystemExit(0 if cov >= 70.0 else 1)' "$coverage_percent"; then
-                coverage_status="pass"
-              else
-                coverage_status="fail"
-                overall_status=1
-              fi
-            else
-              coverage_status="fail"
-              coverage_percent="n/a"
-              overall_status=1
-            fi
-          fi
-
-          overall_label=$([ "$overall_status" -eq 0 ] && echo "success" || echo "failed")
-
-          {
-            echo "syntax=$syntax_status"
-            echo "lint=$lint_status"
             echo "security=$security_status"
-            echo "complexity=$complexity_status"
-            echo "maintainability=$maintainability_status"
-            echo "tests=$tests_status"
-            echo "coverage=$coverage_status"
-            echo "coverage_percent=$coverage_percent"
-            echo "overall=$overall_label"
           } >> "$GITHUB_OUTPUT"
 
-          # Nota: He eliminado la sección final que generaba la variable 'details' 
-          # y el paso 'Upsert PR quality comment' usando github-script, 
-          # ya que dependían exclusivamente de que el evento fuera un Pull Request.
+          # Si quieres que la acción de GitHub marque el Push en ROJO si el linter o seguridad fallan:
+          # exit $overall_status
           
-          # Puedes forzar que la acción falle en GitHub si alguna métrica no pasa cambiando esto a: exit $overall_status
+          # De momento lo dejamos en 0 para que sea puramente informativo como el tuyo original
           exit 0
