@@ -37,9 +37,14 @@ jobs:
         run: |
           set +e
 
-          # Analizar todo el repositorio excluyendo las carpetas indicadas
-          git ls-files '*.py' ':!:discord/**' ':!:venv/**' ':!:__pycache__/**' > python_files.txt
+          # Buscamos físicamente todos los archivos .py excluyendo las carpetas deseadas
+          find . -type f -name "*.py" \
+            ! -path "*/discord/*" \
+            ! -path "*/venv/*" \
+            ! -path "*/__pycache__/*" \
+            > python_files.txt
 
+          # Verificamos si realmente se encontraron archivos
           if [ ! -s python_files.txt ]; then
             echo "No Python files found."
             {
