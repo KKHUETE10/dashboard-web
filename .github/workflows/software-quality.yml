@@ -25,7 +25,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install ruff bandit radon pytest pytest-cov textstat pylint
-          pip install -r requirements.txt
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            echo "requirements.txt not found; skipping project dependency install."
+          fi
 
       - name: Run quality metrics
         id: metrics
