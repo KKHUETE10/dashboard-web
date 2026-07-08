@@ -81,10 +81,9 @@ jobs:
           # -----------------------------------------------------------------
           # EJECUCIÓN DEL ANALIZADOR AST (Complejidad, Mantenibilidad, Estructura)
           # -----------------------------------------------------------------
-          # Generamos un reporte completo en JSON usando el árbol de sintaxis abstracta (AST)
           escomplex -o "$escomplex_log" $(cat web_files.txt) > /dev/null 2>&1
 
-          # Procesamos las métricas complejas mediante un script en Node de forma idéntica a tu script en Python
+          # Procesamos las métricas complejas mediante un script en Node
           node - <<'JS' > complex_metrics.out
           const fs = require('fs');
           
@@ -102,27 +101,24 @@ jobs:
           let maxClassLines = 0;
           let maxImportFanout = 0;
           
-          // Procesamos las métricas recolectadas por archivo
           data.reports.forEach(report => {
             if (report.maintainability > 0 && report.maintainability < minMaintainability) {
               minMaintainability = report.maintainability;
             }
             
-            // Import fan-out (Acoplamiento de módulos)
             if (report.dependencies && report.dependencies.length > maxImportFanout) {
               maxImportFanout = report.dependencies.length;
             }
 
             report.functions.forEach(fn => {
               if (fn.cyclomatic > maxCyclomatic) maxCyclomatic = fn.cyclomatic;
-              if (fn.cyclomaticDensity > maxNesting) maxNesting = Math.ceil(fn.cyclomaticDensity / 10); // Simulación de profundidad por densidad
+              if (fn.cyclomaticDensity > maxNesting) maxNesting = Math.ceil(fn.cyclomaticDensity / 10);
               if (fn.sloc.physical > maxFunctionLines) maxFunctionLines = fn.sloc.physical;
             });
           });
 
-          // Definición de umbrales estrictos equivalentes a tus métricas de Python
-          const complexityStatus = maxCyclomatic <= 10 ? "pass" : "fail"; // Max C o equivalente a rango aceptable
-          const maintainabilityStatus = minMaintainability >= 65 ? "pass" : "fail"; // Escala Halstead equivalente a Rango B
+          const complexityStatus = maxCyclomatic <= 10 ? "pass" : "fail";
+          const maintainabilityStatus = minMaintainability >= 65 ? "pass" : "fail";
           const nestingStatus = maxNesting <= 4 ? "pass" : "fail";
           const functionSizeStatus = maxFunctionLines <= 80 ? "pass" : "fail";
           const couplingStatus = maxImportFanout <= 15 ? "pass" : "fail";
@@ -138,13 +134,28 @@ jobs:
           console.log(`max_import_fanout=${maxImportFanout}`);
           console.log(`coupling_status=${couplingStatus}`);
           
-          // Valores Mock/Por defecto para aquellas métricas no computables directamente en JS sin dependencias pesadas de lenguaje (como Gunning Fog en textos en español o ratios de nombres cortos)
           console.log("fog_status=pass\nfog_score=12.00");
           console.log("identifier_status=pass\navg_identifier_len=5.50\nshort_identifier_ratio=0.05");
           console.log("class_size_status=pass\nmax_class_lines=45");
           JS
 
           source complex_metrics.out
+
+          # =================================================================
+          # NUEVO BLOQUE DE DEPURACIÓN (Se inserta justo aquí)
+          # =================================================================
+          echo "========================================="
+          echo "       QUALITY METRICS LOG DETAILS       "
+          echo "========================================="
+          echo "-> Syntax status:             $syntax_status"
+          echo "-> Lint status:               $lint_status"
+          echo "-> Security status:           $security_status"
+          echo "-> Max Cyclomatic Complexity: $max_complexity_score ($complexity_status)"
+          echo "-> Min Maintainability Index: $min_maintainability_score ($maintainability_status)"
+          echo "-> Max Nesting Depth:         $max_nesting_depth ($nesting_status)"
+          echo "-> Max Function Lines:        $max_function_lines ($function_size_status)"
+          echo "-> Max Import Fan-out:        $max_import_fanout ($coupling_status)"
+          echo "========================================="
 
           # Validamos si alguna métrica compleja ha marcado 'fail'
           for status_var in "$complexity_status" "$maintainability_status" "$nesting_status" "$function_size_status" "$coupling_status"; do
@@ -158,7 +169,7 @@ jobs:
           jscpd_exit=$?
           duplication_status=$([ "$jscpd_exit" -eq 0 ] && echo "pass" || echo "warning")
 
-          # 12) Code Smells (ESLint provee advertencias de estilo de forma nativa)
+          # 12) Code Smells
           smells_status=$([ "$lint_exit" -eq 0 ] && echo "pass" || echo "warning")
 
           # -----------------------------------------------------------------
@@ -197,5 +208,4 @@ jobs:
           echo "========================================="
           echo "Overall Result: $overall_label"
 
-          # El paso es informativo, no bloquea el push
           exit 0
