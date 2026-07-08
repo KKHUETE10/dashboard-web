@@ -23,7 +23,11 @@ jobs:
       - name: Install dependencies and quality tooling
         run: |
           npm ci --include=dev
-          npm install -g jscpd
+          # Instalamos herramientas adicionales para las métricas complejas:
+          # - jscpd: Duplicación de código
+          # - typhonjs-escomplex: Complejidad, mantenibilidad, tamaño de funciones y nesting
+          # - tsc: Comprobación estricta de compilación/sintaxis
+          npm install -g jscpd typhonjs-escomplex typescript
 
       - name: Run web quality metrics
         id: metrics
