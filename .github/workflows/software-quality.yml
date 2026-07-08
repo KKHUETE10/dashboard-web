@@ -23,11 +23,7 @@ jobs:
       - name: Install dependencies and quality tooling
         run: |
           npm ci --include=dev
-          # Instalamos herramientas adicionales para las métricas complejas:
-          # - jscpd: Duplicación de código
-          # - typhonjs-escomplex: Complejidad, mantenibilidad, tamaño de funciones y nesting
-          # - tsc: Comprobación estricta de compilación/sintaxis
-          npm install -g jscpd typhonjs-escomplex typescript
+          npm install -g jscpd
 
       - name: Run web quality metrics
         id: metrics
@@ -90,6 +86,13 @@ jobs:
           # -----------------------------------------------------------------
           # 6) Analizador AST y Generador de Reporte Unificado (Node.js)
           # -----------------------------------------------------------------
+          # Inyectamos de forma segura las variables de Bash como entorno de proceso hacia Node
+          export SYNTAX_STATUS="$syntax_status"
+          export LINT_STATUS="$lint_status"
+          export SECURITY_STATUS="$security_status"
+          export DUPLICATION_STATUS="$duplication_status"
+          export SMELLS_STATUS="$smells_status"
+
           node - <<'JS'
           const fs = require('fs');
           const path = require('path');
@@ -199,10 +202,12 @@ jobs:
           const functionSizeStatus = maxFunctionLines <= 80 ? "pass" : "fail";
           const couplingStatus = maxImportFanout <= 15 ? "pass" : "fail";
 
-          // Determinar el estado global recopilado de Node
-          const syntaxStatus = "${{ syntax_status }}";
-          const lintStatus = "${{ lint_status }}";
-          const securityStatus = "${{ security_status }}";
+          // Recuperar de forma segura el entorno sin colisionar con las llaves de GitHub ${{ }}
+          const syntaxStatus = process.env.SYNTAX_STATUS || "fail";
+          const lintStatus = process.env.LINT_STATUS || "fail";
+          const securityStatus = process.env.SECURITY_STATUS || "fail";
+          const duplicationStatus = process.env.DUPLICATION_STATUS || "warning";
+          const smellsStatus = process.env.SMELLS_STATUS || "warning";
           
           let overallLabel = "success";
           if (syntaxStatus === "fail" || lintStatus === "fail" || securityStatus === "fail" || 
@@ -226,8 +231,8 @@ jobs:
           console.log(` -> Function size (max 80 lines):   [${functionSizeStatus}] (Max lines found: ${maxFunctionLines})`);
           console.log(` -> Class size (max 300 lines):     [pass] (Max lines found: ${maxClassLines})`);
           console.log(` -> Coupling (import fan-out):      [${couplingStatus}] (Max fan-out: ${maxImportFanout})`);
-          console.log(` -> Code duplication (jscpd):       [${{ duplication_status }}]`);
-          console.log(` -> Code smells:                    [${{ smells_status }}]`);
+          console.log(` -> Code duplication (jscpd):       [${duplicationStatus}]`);
+          console.log(` -> Code smells:                    [${smellsStatus}]`);
           console.log("============================================================");
           console.log(` OVERALL WORKFLOW RESULT:           ${overallLabel}`);
           console.log("============================================================");
